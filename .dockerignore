@@ -1,0 +1,13 @@
+.venv
+.git
+.env
+data
+**/node_modules
+**/dist
+**/__pycache__
+**/*.egg-info
+*.db
+*.log
+.env.*
+**/*.pem
+**/*.key

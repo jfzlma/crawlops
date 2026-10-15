@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crawlops"
+version = "0.1.0"
+description = "Container-native Scrapy operations"
+requires-python = ">=3.12"
+dependencies = ["fastapi>=0.115,<1", "uvicorn[standard]>=0.34,<1", "sqlalchemy>=2.0.38,<3", "psycopg[binary]>=3.2,<4", "alembic>=1.14,<2", "pydantic-settings>=2.7,<3", "python-multipart>=0.0.20", "cryptography>=44", "docker>=7.1,<8", "httpx>=0.28,<1", "croniter>=6,<7", "redis>=5,<7"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.9", "scrapy>=2.12,<3"]
+
+[project.scripts]
+crawlop = "crawlops.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["apps/api"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP"]

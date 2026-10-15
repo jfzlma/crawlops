@@ -1,0 +1,38 @@
+name: Docker acceptance
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e '.[dev]'
+      - run: python infrastructure/init.py
+      - run: docker compose up --build --wait --wait-timeout 180
+      - name: Verify Docker lifecycle and versioned deployments
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+          values = dict(line.split('=', 1) for line in Path('.env').read_text().splitlines() if '=' in line)
+          env = {**os.environ, 'CRAWLOPS_PASSWORD': values['CRAWLOPS_ADMIN_PASSWORD']}
+          for script, args in [('infrastructure/acceptance.py', ['--restart']),
+                               ('infrastructure/verify_versions.py', [])]:
+              subprocess.run([sys.executable, script, *args], env=env, check=True)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: version-verification
+          path: data/version-verification/
+          if-no-files-found: ignore
+      - run: docker compose down
+        if: always()

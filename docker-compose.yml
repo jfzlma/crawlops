@@ -1,0 +1,129 @@
+name: crawlops
+x-service: &service
+  build:
+    context: .
+    dockerfile: infrastructure/docker/api.Dockerfile
+  restart: unless-stopped
+  init: true
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: crawlops
+      POSTGRES_USER: crawlops
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run make init first}
+    volumes: ["postgres:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crawlops -d crawlops"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks: [control]
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["redis:/data"]
+    restart: unless-stopped
+    networks: [control]
+  migrate:
+    <<: *service
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      CRAWLOPS_DATABASE_URL: postgresql+psycopg://crawlops:${POSTGRES_PASSWORD}@postgres:5432/crawlops
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+    networks: [control]
+  api:
+    <<: *service
+    environment:
+      CRAWLOPS_DATABASE_URL: postgresql+psycopg://crawlops:${POSTGRES_PASSWORD}@postgres:5432/crawlops
+      CRAWLOPS_DATA_DIR: /data
+      CRAWLOPS_ADMIN_EMAIL: ${CRAWLOPS_ADMIN_EMAIL:-admin@crawlops.local}
+      CRAWLOPS_ADMIN_PASSWORD: ${CRAWLOPS_ADMIN_PASSWORD:?Run make init first}
+      CRAWLOPS_AGENT_TOKEN: ${CRAWLOPS_AGENT_TOKEN:?Run make init first}
+      CRAWLOPS_ENCRYPTION_KEY: ${CRAWLOPS_ENCRYPTION_KEY:?Run make init first}
+    volumes: ["data:/data"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [control]
+  engine:
+    image: docker:27-dind
+    hostname: engine
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: /certs
+      DOCKER_TLS_SAN: DNS:engine
+    volumes: ["engine:/var/lib/docker", "certs:/certs/client"]
+    restart: unless-stopped
+    networks: [execution]
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  worker:
+    <<: *service
+    command: ["python", "-m", "crawlops.agent"]
+    environment: &agent-env
+      CRAWLOPS_API_URL: http://api:8000
+      CRAWLOPS_AGENT_TOKEN: ${CRAWLOPS_AGENT_TOKEN}
+      CRAWLOPS_AGENT_KIND: worker
+      CRAWLOPS_AGENT_NAME: local-worker
+      DOCKER_HOST: tcp://engine:2376
+      DOCKER_TLS_VERIFY: "1"
+      DOCKER_CERT_PATH: /certs/client
+    volumes: ["certs:/certs/client:ro"]
+    depends_on:
+      api: { condition: service_healthy }
+      engine: { condition: service_healthy }
+    networks: [control, execution]
+  builder:
+    <<: *service
+    command: ["python", "-m", "crawlops.agent"]
+    environment:
+      <<: *agent-env
+      CRAWLOPS_AGENT_KIND: builder
+      CRAWLOPS_AGENT_NAME: local-builder
+    volumes: ["certs:/certs/client:ro"]
+    depends_on:
+      api: { condition: service_healthy }
+      engine: { condition: service_healthy }
+    networks: [control, execution]
+  scheduler:
+    <<: *service
+    command: ["python", "-m", "crawlops.scheduler"]
+    environment:
+      CRAWLOPS_API_URL: http://api:8000
+      CRAWLOPS_AGENT_TOKEN: ${CRAWLOPS_AGENT_TOKEN}
+    depends_on:
+      api: { condition: service_healthy }
+    networks: [control]
+  web:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/web.Dockerfile
+    ports: ["127.0.0.1:${CRAWLOPS_PORT:-8080}:8080"]
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
+    networks: [control]
+
+volumes:
+  postgres:
+  redis:
+  data:
+  engine:
+  certs:
+networks:
+  control:
+  execution:
